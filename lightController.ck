@@ -1,6 +1,7 @@
 // Imports
-@import "lights.ck"
 @import "config.ck"
+@import "lights.ck"
+@import "utils.ck"
 
 // Chugin imports
 @import "HashMap"
@@ -173,7 +174,7 @@ fun void strobeMode() {
         while (activeLightingMode == LightingModes.STROBE) {
             for (int lightId; lightId < lights.size(); lightId++) {
                 if (strobeEnabled[lightId]) {
-                    Std.scalef(modWheelValue, 0, 127, 250, 50) => float strobeMs;
+                    Utils.scalef(modWheelValue, 0, 127, 1000, 61) => float strobeMs;
                     <<< "Strobe MS:", strobeMs >>>;
 
                     strobeMs::ms => strobeState[lightId].period;
