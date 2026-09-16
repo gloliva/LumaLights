@@ -14,14 +14,13 @@ Config config(me.dir() + "/config.json");
 DMX dmx;
 dmx.protocol(config.getProtocol());
 dmx.port(config.getPort());
+// For Enttec Open DMX USB, RTS must be disabled
+false => dmx.rts;
 
 if (!dmx.init()) {
     cherr <= "ERROR: Serial device could not initialize." <= IO.nl();
     me.exit();
 }
-
-// For Enttec Open DMX USB, RTS must be disabled
-false => dmx.rts;
 
 
 // Set up lights
@@ -60,14 +59,21 @@ class LightingModes {
     1 => static int MANUAL_SNAP;
     2 => static int STROBE;
 
+    // Aftertouch effects
+    3 => static int AFTERTOUCH_STROBE;
+
     [
         LightingModes.MANUAL_FADE,
         LightingModes.MANUAL_SNAP,
         LightingModes.STROBE,
+        LightingModes.AFTERTOUCH_STROBE,
     ] @=> static int ALL_MODES[];
 }
 LightingModes.MANUAL_FADE => int activeLightingMode;
+
+// Events
 Event startStrobe;
+Event startAftertouch;
 
 
 // Init MIDI
@@ -81,6 +87,7 @@ if (!min.open("Lumatone")) {
 
 // Midi parameters
 50 => int modWheelValue;
+
 
 
 class MidiMessage {
@@ -112,6 +119,20 @@ class MidiMessage {
 vec3 activeColors[lights.size()];
 
 
+// Aftertouch handling
+0 => int aftertouchEnabled;
+int activeAftertouch[lights.size()];
+
+
+// Strobe handling
+int strobeEnabled[lights.size()];
+SqrOsc strobeState[lights.size()];
+for (SqrOsc strobe : strobeState) {
+    1::second => strobe.period;
+    strobe => blackhole;
+}
+
+
 // Send DMX information on schedule
 fun void send() {
     while (true) {
@@ -136,31 +157,57 @@ fun void removeNote(int heldNotes[], int note) {
 }
 
 
-// fun void strobe() {
-//     while (true) {
-//         startStrobe => now;
+fun int getLastNote(int heldNotes[]) {
+    if (heldNotes.size() == 0) {
+        return -1;
+    }
 
-//         1 => int colorOn;
-//         while (activeLightingMode == LightingModes.STROBE) {
-//             for (int i; i < lights.size(); i++) {
-//                 2 + (i * 9) => int dmxChannel;
-//                 if (colorOn) {
-//                     activeColors[i] => vec3 color;
-//                     <<< "Color on?", dmxChannel, color >>>;
-//                     setColor(dmxChannel, color);
-//                 } else {
-//                     // Turn color channels off
-//                     <<< "Color OFF", dmxChannel >>>;
-//                     setColor(dmxChannel, @(0, 0, 0));
-//                 }
-//             }
+    return heldNotes[-1];
+}
 
-//             // Strobe time
-//             1 - colorOn => colorOn;
-//             500::ms => now;
-//         }
-//     }
-// } spork ~ strobe();
+
+fun void strobeMode() {
+    while (true) {
+        startStrobe => now;
+
+        while (activeLightingMode == LightingModes.STROBE) {
+            for (int lightId; lightId < lights.size(); lightId++) {
+                if (strobeEnabled[lightId]) {
+                    Std.scalef(modWheelValue, 0, 127, 250, 50) => float strobeMs;
+                    <<< "Strobe MS:", strobeMs >>>;
+
+                    strobeMs::ms => strobeState[lightId].period;
+                    if (strobeState[lightId].last() > 0) {
+                        lights[lightId].setMaster(100);
+                    } else {
+                        lights[lightId].setMaster(0);
+                    }
+                }
+            }
+            1::ms => now;
+        }
+    }
+} spork ~ strobeMode();
+
+
+fun void aftertouchEffects() {
+    while (true) {
+        if (aftertouchEnabled) {
+            for (int lightId; lightId < lights.size(); lightId++) {
+                Std.scalef(activeAftertouch[lightId], 0, 127, 300, 50)::ms => strobeState[lightId].period;
+
+                if (strobeEnabled[lightId]) {
+                    if (strobeState[lightId].last() > 0) {
+                        lights[lightId].setMaster(100);
+                    } else {
+                        lights[lightId].setMaster(0);
+                    }
+                }
+            }
+        }
+        25::ms => now;
+    }
+} spork ~ aftertouchEffects();
 
 
 // MIDI Handling
@@ -185,6 +232,9 @@ while( true ) {
                 } else if (msg.data2 == LightingModes.STROBE) {
                     LightingModes.STROBE => activeLightingMode;
                     startStrobe.broadcast();
+                } else if (msg.data2 == LightingModes.AFTERTOUCH_STROBE && activeLightingMode != LightingModes.STROBE) {
+                    1 - aftertouchEnabled => aftertouchEnabled;
+                    <<< "Aftertouch mode:", aftertouchEnabled >>>;
                 }
             } else {
                 0 => int startLightId;
@@ -212,6 +262,10 @@ while( true ) {
                             light.fadeMaster(100, 100);
                         } else if (activeLightingMode == LightingModes.MANUAL_SNAP) {
                             light.setMaster(100);
+                        } else if (activeLightingMode == LightingModes.STROBE) {
+                            startStrobe.broadcast();
+                            1 => strobeEnabled[lightId];
+                            0. => strobeState[lightId].phase;
                         }
                     }
                 }
@@ -238,15 +292,49 @@ while( true ) {
                 heldNotes[lightId].size() => int size;
                 if (size == 0) {
                     if (activeLightingMode == LightingModes.MANUAL_FADE) {
-                        Std.scalef(modWheelValue, 0, 127, 100, 1000)$int => int fadeMs;
+                        Std.scalef(modWheelValue, 8, 127, 100, 1000)$int => int fadeMs;
                         light.fadeMaster(0, fadeMs);
                     } else if (activeLightingMode == LightingModes.MANUAL_SNAP) {
+                        light.setMaster(0);
+                    } else if (activeLightingMode == LightingModes.STROBE) {
+                        0 => strobeEnabled[lightId];
                         light.setMaster(0);
                     }
                 } else {
                     heldNotes[lightId][size-1] => int currNote;
                     colors[currNote] => vec3 color;
                     light.setColor(color);
+                }
+            }
+        } else if (msg.data1 >= MidiMessage.POLYPHONIC_AFTERTOUCH && msg.data1 < MidiMessage.CONTROL_CHANGE) {
+            // Polyphonic Aftertouch
+            // data1 == Status + Channel | data2 == Note number | data3 == aftertouch value
+            if (!aftertouchEnabled) continue;
+
+            msg.data1 - MidiMessage.POLYPHONIC_AFTERTOUCH => int channel;
+
+            0 => int startLightId;
+            lights.size() => int endLightId;
+
+            if (activeLightingTarget == LightingTarget.INDIVIDUAL) {
+                channel => startLightId;
+                channel + 1 => endLightId;
+            }
+
+            for (startLightId => int lightId; lightId < endLightId; lightId++) {
+                if (getLastNote(heldNotes[channel]) == msg.data2) {
+                    msg.data3 => activeAftertouch[channel];
+                    if (msg.data3 > 8) {
+                        if (!strobeEnabled[lightId]) {
+                            1 => strobeEnabled[lightId];
+                            0. => strobeState[lightId].phase;
+                        }
+                    } else {
+                        if (strobeEnabled[lightId]) {
+                            0 => strobeEnabled[lightId];
+                            0. => strobeState[lightId].phase;
+                        }
+                    }
                 }
             }
         } else if (msg.data1 >= MidiMessage.CONTROL_CHANGE && msg.data1 < MidiMessage.PROGRAM_CHANGE) {
