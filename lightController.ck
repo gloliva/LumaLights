@@ -195,7 +195,7 @@ fun void aftertouchEffects() {
     while (true) {
         if (aftertouchEnabled) {
             for (int lightId; lightId < lights.size(); lightId++) {
-                Std.scalef(activeAftertouch[lightId], 0, 127, 300, 50)::ms => strobeState[lightId].period;
+                Std.scalef(activeAftertouch[lightId], 0, 127, 300, 61)::ms => strobeState[lightId].period;
 
                 if (strobeEnabled[lightId]) {
                     if (strobeState[lightId].last() > 0) {
@@ -206,7 +206,7 @@ fun void aftertouchEffects() {
                 }
             }
         }
-        25::ms => now;
+        1::ms => now;
     }
 } spork ~ aftertouchEffects();
 
