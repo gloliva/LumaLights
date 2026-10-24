@@ -1,0 +1,8 @@
+# samples dir
+samples/
+
+# vs code workspace
+*.code-workspace
+
+# Apple
+.DS_Store
