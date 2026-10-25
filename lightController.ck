@@ -1,5 +1,7 @@
 // Imports
+@import "audio.ck"
 @import "config.ck"
+@import "midiRecorder.ck"
 @import "lights.ck"
 @import "utils.ck"
 
@@ -42,6 +44,29 @@ for (int i; i < config.numLights(); i++) {
 }
 
 
+// Init audio
+"/Users/gloliva/workspace/projects/DMX/samples" => string samplesPath;
+[
+    Utils.joinPath(samplesPath, "Kick.wav"),
+    Utils.joinPath(samplesPath, "Rim.wav"),
+    Utils.joinPath(samplesPath, "Snare.aif"),
+    Utils.joinPath(samplesPath, "Snare2.aif"),
+    Utils.joinPath(samplesPath, "Clap.wav"),
+    Utils.joinPath(samplesPath, "Hihat-Closed.aif"),
+    Utils.joinPath(samplesPath, "Hihat-Open.wav"),
+    Utils.joinPath(samplesPath, "Crash.aif"),
+    Utils.joinPath(samplesPath, "Ride.aif"),
+    Utils.joinPath(samplesPath, "Tube.wav"),
+    Utils.joinPath(samplesPath, "Slap.wav"),
+    Utils.joinPath(samplesPath, "Timbales.aif"),
+ ] @=> string initSamples[];
+
+Sampler samplers[lights.size()];
+for (Sampler sampler : samplers) {
+    sampler.load(initSamples);
+}
+
+
 // Lighting parameters
 int heldNotes[lights.size()][0];
 14 => int LIGHT_TARGET_MODE;
@@ -60,8 +85,13 @@ class LightingModes {
     1 => static int MANUAL_SNAP;
     2 => static int STROBE;
 
-    // Aftertouch effects
+    // Aftertouch effects0
     3 => static int AFTERTOUCH_STROBE;
+
+    // MIDI Recording
+    4 => static int NEXT_MIDI_SEQUENCE;
+    5 => static int PREV_MIDI_SEQUENCE;
+    6 => static int RECORD_MODE;
 
     [
         LightingModes.MANUAL_FADE,
@@ -85,9 +115,11 @@ if (!min.open("Lumatone")) {
     me.exit();
 }
 
+MidiRecorder midiRecorder;
 
 // Midi parameters
 50 => int modWheelValue;
+0 => int recordingEnabled;
 
 
 
@@ -236,8 +268,27 @@ while( true ) {
                 } else if (msg.data2 == LightingModes.AFTERTOUCH_STROBE && activeLightingMode != LightingModes.STROBE) {
                     1 - aftertouchEnabled => aftertouchEnabled;
                     <<< "Aftertouch mode:", aftertouchEnabled >>>;
+                } else if (msg.data2 == LightingModes.NEXT_MIDI_SEQUENCE) {
+                    midiRecorder.updateActiveSequence(1);
+                } else if (msg.data2 == LightingModes.PREV_MIDI_SEQUENCE) {
+                    midiRecorder.updateActiveSequence(-1);
+                } else if (msg.data2 == LightingModes.RECORD_MODE) {
+                    1 - recordingEnabled => recordingEnabled;
+
+                    if (recordingEnabled) {
+                        midiRecorder.resetSequence();
+                    }
+                    <<< "MIDI Recording mode:", recordingEnabled >>>;
                 }
             } else {
+                // Play sample
+                samplers[channel].play(msg.data2);
+
+                // Handle MIDI recording
+                if (recordingEnabled) {
+                    midiRecorder.addRecord(msg, 500::ms);
+                }
+
                 0 => int startLightId;
                 lights.size() => int endLightId;
 
